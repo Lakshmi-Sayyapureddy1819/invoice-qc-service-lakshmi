@@ -1,0 +1,4 @@
+pdfplumber
+pydantic>=1.10,<3
+fastapi
+uvicorn

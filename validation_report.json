@@ -1,0 +1,35 @@
+{
+  "summary": {
+    "total_invoices": 5,
+    "valid_invoices": 5,
+    "invalid_invoices": 0,
+    "error_counts": {}
+  },
+  "results": [
+    {
+      "invoice_id": "sample_pdf_1",
+      "is_valid": true,
+      "errors": []
+    },
+    {
+      "invoice_id": "sample_pdf_2",
+      "is_valid": true,
+      "errors": []
+    },
+    {
+      "invoice_id": "sample_pdf_3",
+      "is_valid": true,
+      "errors": []
+    },
+    {
+      "invoice_id": "sample_pdf_4",
+      "is_valid": true,
+      "errors": []
+    },
+    {
+      "invoice_id": "sample_pdf_5",
+      "is_valid": true,
+      "errors": []
+    }
+  ]
+}
