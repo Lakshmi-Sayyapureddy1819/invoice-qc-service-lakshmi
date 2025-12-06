@@ -4,18 +4,34 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from typing import List, Optional
 
 import pdfplumber
+try:
+    from PIL import Image
+    import pytesseract
+    # Allow overriding the Tesseract binary path via environment variable
+    import os
+    _TESSERACT_CMD = os.getenv("TESSERACT_CMD")
+    if _TESSERACT_CMD:
+        try:
+            pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
+        except Exception:
+            # ignore if setting fails; OCR will fail later if binary is missing
+            pass
+except Exception:
+    Image = None
+    pytesseract = None
 
-from .config import (
+from .config_labels import (
 	LABEL_PATTERNS,
 	DATE_PATTERNS,
 	ALLOWED_CURRENCIES,
 	AMOUNT_PATTERN,
 )
+from .lang_utils import clean_text, extract_lines
 from .models import Invoice, LineItem
 
 
@@ -31,6 +47,24 @@ def extract_text_from_pdf(pdf_path: Path) -> RawInvoiceText:
 		for page in pdf.pages:
 			parts.append(page.extract_text() or "")
 	return RawInvoiceText(path=pdf_path, full_text="\n".join(parts))
+
+
+def extract_text_from_image(image_path: Path) -> RawInvoiceText:
+	"""Extract text from an image using pytesseract (if available).
+
+	If pytesseract or Pillow are not installed, returns an empty string so the
+	rest of the pipeline can continue without crashing.
+	"""
+	if Image is None or pytesseract is None:
+		# OCR not available in this environment
+		return RawInvoiceText(path=image_path, full_text="")
+
+	try:
+		img = Image.open(str(image_path))
+		text = pytesseract.image_to_string(img)
+		return RawInvoiceText(path=image_path, full_text=text or "")
+	except Exception:
+		return RawInvoiceText(path=image_path, full_text="")
 
 
 def _parse_date_from_text(text: str) -> Optional[str]:
@@ -149,8 +183,18 @@ def parse_raw_invoice(raw: RawInvoiceText) -> Invoice:
 	if invoice_date_str is None:
 		invoice_date_str = datetime.today().date().isoformat()
 
+	# Ensure invoice_date_str is an ISO string (some helpers may return date objects)
+	if isinstance(invoice_date_str, (datetime, date)):
+		invoice_date_str = invoice_date_str.isoformat()
+	else:
+		invoice_date_str = str(invoice_date_str)
+
 	due_date_raw = _extract_single_field(text, "due_date")
 	due_date_str = _parse_date_from_text(due_date_raw) if due_date_raw else None
+	if isinstance(due_date_str, (datetime, date)):
+		due_date_str = due_date_str.isoformat()
+	elif due_date_str is not None:
+		due_date_str = str(due_date_str)
 
 	seller_name = _extract_single_field(text, "seller_name") or "UNKNOWN_SELLER"
 	buyer_name = _extract_single_field(text, "buyer_name") or "UNKNOWN_BUYER"
@@ -169,7 +213,7 @@ def parse_raw_invoice(raw: RawInvoiceText) -> Invoice:
 	for pat in LABEL_PATTERNS.get("tax_amount", []):
 		m = pat.search(text)
 		if m:
-			tax_amount = _parse_amount(m.group(2))
+			tax_amount = _parse_amount(m.group(1))
 			if tax_amount is not None:
 				break
 
@@ -185,8 +229,9 @@ def parse_raw_invoice(raw: RawInvoiceText) -> Invoice:
 
 	return Invoice(
 		invoice_number=invoice_number_raw,
-		invoice_date=datetime.fromisoformat(invoice_date_str).date(),
-		due_date=datetime.fromisoformat(due_date_str).date() if due_date_str else None,
+		# Invoice model expects ISO date strings (Pydantic string field)
+		invoice_date=invoice_date_str,
+		due_date=due_date_str if due_date_str else None,
 		seller_name=seller_name,
 		buyer_name=buyer_name,
 		currency=currency,
@@ -208,7 +253,20 @@ def extract_invoices_from_dir(pdf_dir: str) -> List[Invoice]:
 	return invoices
 
 
-def export_invoices_to_json(invoices: List[Invoice], output_path: str) -> None:
+def export_invoices_to_json(invoices: List[Invoice], output_path: str = None) -> None:
+	"""
+	Export invoices to JSON file.
+	
+	Args:
+		invoices: List of Invoice objects.
+		output_path: Path to output JSON file. If None, saves to data/extracted_invoices.json
+	"""
+	if output_path is None:
+		data_dir = Path(__file__).parent.parent / "data"
+		data_dir.mkdir(exist_ok=True)
+		output_path = str(data_dir / "extracted_invoices.json")
+	
 	data = [inv.model_dump() for inv in invoices]
 	out = Path(output_path)
+	out.parent.mkdir(parents=True, exist_ok=True)
 	out.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")

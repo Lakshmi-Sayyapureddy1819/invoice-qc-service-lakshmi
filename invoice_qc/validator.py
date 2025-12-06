@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date
-from typing import Iterable, List, Tuple
+from datetime import date, datetime
+from typing import Iterable, List, Optional, Tuple
 
 from .config import ALLOWED_CURRENCIES, MIN_VALID_DATE, MAX_VALID_DATE, EPSILON
 from .models import BatchValidationSummary, Invoice, InvoiceValidationResult
@@ -12,20 +12,48 @@ from .models import BatchValidationSummary, Invoice, InvoiceValidationResult
 def _check_completeness_and_format(inv: Invoice) -> List[str]:
     errors: List[str] = []
 
-    if not inv.invoice_number.strip():
+    def _safe_str(s: Optional[str]) -> str:
+        return (s or "").strip()
+
+    if not _safe_str(inv.invoice_number):
         errors.append("missing_field: invoice_number")
-    if not inv.seller_name.strip():
+    if not _safe_str(inv.seller_name):
         errors.append("missing_field: seller_name")
-    if not inv.buyer_name.strip():
+    if not _safe_str(inv.buyer_name):
         errors.append("missing_field: buyer_name")
 
-    if not (MIN_VALID_DATE <= inv.invoice_date <= MAX_VALID_DATE):
-        errors.append("format: invoice_date_out_of_range")
+    # Normalize invoice_date / due_date to date objects for comparisons
+    def _to_date(val) -> Optional[date]:
+        if val is None:
+            return None
+        if isinstance(val, date):
+            return val
+        if isinstance(val, datetime):
+            return val.date()
+        if isinstance(val, str):
+            try:
+                # accept ISO date strings
+                return date.fromisoformat(val)
+            except Exception:
+                try:
+                    return datetime.fromisoformat(val).date()
+                except Exception:
+                    return None
+        return None
 
-    if inv.due_date and inv.due_date < inv.invoice_date:
+    inv_date = _to_date(inv.invoice_date)
+    due_date = _to_date(inv.due_date)
+
+    if inv_date is None:
+        errors.append("format: invoice_date_invalid")
+    else:
+        if not (MIN_VALID_DATE <= inv_date <= MAX_VALID_DATE):
+            errors.append("format: invoice_date_out_of_range")
+
+    if due_date and inv_date and due_date < inv_date:
         errors.append("business_rule_failed: due_date_before_invoice_date")
 
-    if inv.currency.upper() not in ALLOWED_CURRENCIES:
+    if not inv.currency or inv.currency.upper() not in ALLOWED_CURRENCIES:
         errors.append("format: invalid_currency")
 
     return errors
@@ -61,9 +89,23 @@ def _check_business_rules(inv: Invoice) -> List[str]:
     return errors
 
 
-def _find_duplicates(invoices: Iterable[Invoice]) -> List[Tuple[str, str, date]]:
+def _find_duplicates(invoices: Iterable[Invoice]) -> List[Tuple[str, str, str]]:
+    # Build a normalized key (invoice_number, seller_name, invoice_date_iso)
+    def _norm_date_for_key(val) -> str:
+        if val is None:
+            return ""
+        if isinstance(val, date):
+            return val.isoformat()
+        if isinstance(val, datetime):
+            return val.date().isoformat()
+        return str(val)
+
     key_counts = Counter(
-        (inv.invoice_number.strip(), inv.seller_name.strip(), inv.invoice_date)
+        (
+            (inv.invoice_number or "").strip(),
+            (inv.seller_name or "").strip(),
+            _norm_date_for_key(inv.invoice_date),
+        )
         for inv in invoices
     )
     duplicates = [k for k, c in key_counts.items() if c > 1]
@@ -83,8 +125,21 @@ def validate_invoices(
 
         errors.extend(_check_completeness_and_format(inv))
         errors.extend(_check_business_rules(inv))
+        # Normalize key for duplicate detection
+        def _norm_date_for_key(val) -> str:
+            if val is None:
+                return ""
+            if isinstance(val, date):
+                return val.isoformat()
+            if isinstance(val, datetime):
+                return val.date().isoformat()
+            return str(val)
 
-        key = (inv.invoice_number.strip(), inv.seller_name.strip(), inv.invoice_date)
+        key = (
+            (inv.invoice_number or "").strip(),
+            (inv.seller_name or "").strip(),
+            _norm_date_for_key(inv.invoice_date),
+        )
         if key in duplicates:
             errors.append("anomaly: duplicate_invoice_key")
 

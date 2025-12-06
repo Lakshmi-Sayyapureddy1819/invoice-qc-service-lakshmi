@@ -1,8 +1,10 @@
 # invoice_qc/__init__.py
-
 __all__ = [
     "models",
-    "config",
+    "lang_utils",
+    "config_labels",
+    "gemini_fallback",
     "extractor",
     "validator",
+    "cli",
 ]

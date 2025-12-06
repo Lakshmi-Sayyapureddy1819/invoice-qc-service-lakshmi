@@ -1,4 +1,29 @@
-pdfplumber
-pydantic>=1.10,<3
+# FastAPI backend
 fastapi
-uvicorn
+uvicorn[standard]
+
+# PDF extraction
+pdfplumber
+
+# Multi-language detection
+langdetect
+regex
+
+# Date parsing
+dateparser
+
+# Pydantic (FastAPI uses pydantic v2)
+pydantic>=2.0
+
+# AI (Gemini)
+google-generativeai
+
+# Streamlit UI
+streamlit
+requests
+
+# File uploads for FastAPI
+python-multipart
+
+# Optional (recommended) for environment variable loading
+python-dotenv
