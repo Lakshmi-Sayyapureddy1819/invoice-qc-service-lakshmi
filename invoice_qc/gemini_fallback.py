@@ -1,97 +1,83 @@
 import os
-from dotenv import load_dotenv
-import google.generativeai as genai
+from google import generativeai as genai
 
-# Load .env file if present
-load_dotenv()
+# ----------------------------------------------------
+# Load API Key
+# ----------------------------------------------------
+API_KEY = os.getenv("GEMINI_API_KEY")
 
-# -----------------------------------------------------------
-# LOAD GEMINI API KEY
-# -----------------------------------------------------------
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not GEMINI_API_KEY:
-    print("❌ ERROR: GEMINI_API_KEY is missing. Set it in your .env file.")
+if API_KEY:
+    print(f"✅ GEMINI_API_KEY loaded: {API_KEY[:6]}********")
+    genai.configure(api_key=API_KEY)
 else:
-    print(f"✅ GEMINI_API_KEY loaded: {GEMINI_API_KEY[:6]}********")
-
-# Configure Gemini
-try:
-    if GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-except Exception as e:
-    print(f"⚠️  Warning: Gemini configuration failed: {e}")
-    GEMINI_API_KEY = None
+    print("❌ ERROR: GEMINI_API_KEY not found in environment!")
 
 
+# ----------------------------------------------------
+# Updated Gemini Models (100% correct for 2024–2025)
+# ----------------------------------------------------
+PREFERRED_MODELS = [
+    "gemini-1.5-flash-latest",   # Fastest, cheapest
+    "gemini-1.5-pro-latest"      # Best reasoning, most accurate
+]
 
-# -----------------------------------------------------------
-# INTERNAL: Cleanly extract text from Gemini response
-# -----------------------------------------------------------
-def _extract_response_text(response):
-    """Extracts text safely from Gemini's response object."""
+
+# ----------------------------------------------------
+# Clean extractor for response text
+# ----------------------------------------------------
+def _extract_text(response):
+    """Safely extract text from response"""
+    if hasattr(response, "text") and response.text:
+        return response.text
+
+    # candidate-based fallback
     try:
-        # Standard format
-        if hasattr(response, "text") and response.text:
-            return response.text
-
-        # Some responses return candidate parts
-        if hasattr(response, "candidates") and response.candidates:
+        if response.candidates:
             parts = response.candidates[0].content.parts
             if parts and hasattr(parts[0], "text"):
                 return parts[0].text
+    except Exception:
+        pass
 
-        # No usable text found
-        return None
-    except Exception as e:
-        print("❌ RESPONSE PARSING ERROR:", e)
-        return None
+    return None
 
 
-# -----------------------------------------------------------
-# MAIN GEMINI CALL
-# -----------------------------------------------------------
-def _call_gemini(prompt: str) -> str:
+# ----------------------------------------------------
+# MAIN CALL FUNCTION
+# ----------------------------------------------------
+def _call_gemini(prompt: str):
     """
-    Calls Gemini API safely.
-    - Attempts gemini-pro first
-    - Falls back to gemini-1.5-flash if needed
-    - Returns clean text or None on failure
+    Tries each modern Gemini model until one succeeds.
+    Returns string or None.
     """
 
-    if not GEMINI_API_KEY:
-        print("❌ ERROR: No Gemini API key found")
+    if not API_KEY:
+        print("❌ Gemini API key missing, cannot call model.")
         return None
 
     print("\n🧠 ---- CALLING GEMINI ----")
-    print("📤 Prompt (first 300 chars):")
-    print(prompt[:300], "...")
-    print("---------------------------\n")
+    print("📤 Prompt (first 200 chars):")
+    print(prompt[:200], "...")
+    print("---------------------------")
 
-    models_to_try = ["gemini-pro", "gemini-1.5-flash"]
-
-    for model_name in models_to_try:
+    for model_name in PREFERRED_MODELS:
         try:
             print(f"🤖 Trying model: {model_name}")
 
             model = genai.GenerativeModel(model_name)
-
             response = model.generate_content(prompt)
 
-            # Log raw response for debugging
-            print("📥 Raw Gemini Response:", response)
-
-            text = _extract_response_text(response)
+            text = _extract_text(response)
 
             if text:
-                print("✅ Gemini responded successfully!")
-                print("📄 Response text:", text[:300], "...\n")
+                print("✅ Response received.")
+                print("📄 AI Output:", text[:200], "...\n")
                 return text
             else:
-                print(f"⚠ No text extracted from model {model_name}")
+                print(f"⚠ No usable text extracted from {model_name}")
 
         except Exception as e:
-            print(f"❌ ERROR with model {model_name}: {e}")
+            print(f"❌ ERROR with {model_name}: {e}")
 
-    print("❌ All Gemini models failed. Returning None.")
+    print("❌ All Gemini model attempts failed.")
     return None
