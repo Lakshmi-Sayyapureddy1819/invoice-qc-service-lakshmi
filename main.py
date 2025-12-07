@@ -1,9 +1,12 @@
+# main.py
 from typing import List
+from pathlib import Path
+import tempfile
+import os
+import json
+
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
-import json
-import os
-from dotenv import load_dotenv
 
 from invoice_qc.models import Invoice
 from invoice_qc.extractor import (
@@ -14,30 +17,22 @@ from invoice_qc.extractor import (
 from invoice_qc.validator import validate_invoices
 from invoice_qc.gemini_fallback import _call_gemini
 
-# Load .env settings (for GEMINI_API_KEY)
-load_dotenv()
-
-# -------------------------------------------------------------------
-# FastAPI App
-# -------------------------------------------------------------------
-app = FastAPI(title="Invoice QC Service", version="1.0.0")
+app = FastAPI(title="Invoice QC Service (Multilingual + AI Chat)")
 
 
-# -------------------------------------------------------------------
-# HEALTH CHECK
-# -------------------------------------------------------------------
+# ---------------------------------------------------------
+# HEALTH / OCR STATUS
+# ---------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "gemini_key_loaded": bool(os.getenv("GEMINI_API_KEY"))}
 
 
-# -------------------------------------------------------------------
-# OCR STATUS CHECK
-# -------------------------------------------------------------------
 @app.get("/ocr-status")
 def ocr_status():
-    """Check whether OCR libraries (Pillow + pytesseract) are importable.
-    Native Tesseract installation is still required for real OCR.
+    """
+    Just checks if Pillow + pytesseract are importable.
+    Native Tesseract binary still required for real OCR of images.
     """
     try:
         import pytesseract  # noqa
@@ -47,9 +42,9 @@ def ocr_status():
         return {"ocr_available": False}
 
 
-# -------------------------------------------------------------------
-# VALIDATE JSON (for API clients)
-# -------------------------------------------------------------------
+# ---------------------------------------------------------
+# VALIDATE JSON DIRECTLY (for API / tests)
+# ---------------------------------------------------------
 @app.post("/validate-json")
 def validate_json(invoices: List[Invoice]):
     results, summary = validate_invoices(invoices)
@@ -60,39 +55,30 @@ def validate_json(invoices: List[Invoice]):
     }
 
 
-# -------------------------------------------------------------------
-# EXTRACT + VALIDATE PDFs & IMAGES
-# Used by Streamlit UI
-# -------------------------------------------------------------------
+# ---------------------------------------------------------
+# EXTRACT + VALIDATE PDFs/IMAGES
+# ---------------------------------------------------------
 @app.post("/extract-and-validate-pdfs")
 async def extract_and_validate_pdfs(files: List[UploadFile] = File(...)):
     invoices: List[Invoice] = []
 
     for f in files:
-        import tempfile
-        from pathlib import Path
-
-        # Save uploaded file temporarily
         suffix = Path(f.filename).suffix.lower()
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            file_bytes = await f.read()
-            tmp.write(file_bytes)
+            tmp.write(await f.read())
             tmp_path = Path(tmp.name)
 
-        # Select extraction mode based on file extension
+        # Decide PDF vs image
         if suffix in [".jpg", ".jpeg", ".png"]:
-            raw_text = extract_text_from_image(tmp_path)
+            raw = extract_text_from_image(tmp_path)
         else:
-            raw_text = extract_text_from_pdf(tmp_path)
+            raw = extract_text_from_pdf(tmp_path)
 
-        # Parse extracted text into invoice structured format
-        invoice = parse_raw_invoice(raw_text)
+        invoice = parse_raw_invoice(raw)
         invoices.append(invoice)
 
-        # Remove temp file
         tmp_path.unlink(missing_ok=True)
 
-    # Apply validation rules
     results, summary = validate_invoices(invoices)
 
     return {
@@ -102,10 +88,9 @@ async def extract_and_validate_pdfs(files: List[UploadFile] = File(...)):
     }
 
 
-# -------------------------------------------------------------------
-# CHAT ENDPOINT — AI ANSWERS ABOUT THE INVOICE
-# -------------------------------------------------------------------
-
+# ---------------------------------------------------------
+# CHAT ENDPOINT (Multilingual AI over invoices)
+# ---------------------------------------------------------
 class ChatDirectRequest(BaseModel):
     invoices: list
     summary: dict
@@ -116,39 +101,32 @@ class ChatDirectRequest(BaseModel):
 def chat_direct(req: ChatDirectRequest):
     """
     Multilingual invoice chatbot:
-    - Uses only invoice JSON + summary provided by user
-    - Responds in user's question language
-    - Uses Gemini for reasoning
+    - Uses ONLY the provided invoice JSON + summary (no external DB)
+    - Responds in the SAME LANGUAGE as the user's question
     """
 
     prompt = f"""
 You are a multilingual invoice assistant.
-You must answer ONLY using the invoice data provided.
 
-If information is missing, say:
+You must answer ONLY using the invoice data provided.
+If the answer is not present in the invoices, reply:
 "Information not found in the invoices."
 
-Always answer in the SAME LANGUAGE as the user's question.
+Always respond in the SAME LANGUAGE as the user's question.
 
------------------------------------------------------
-📄 INVOICES (JSON):
+--- INVOICES (JSON) ---
 {json.dumps(req.invoices, indent=2, ensure_ascii=False)}
 
-📊 SUMMARY:
+--- SUMMARY (JSON) ---
 {json.dumps(req.summary, indent=2, ensure_ascii=False)}
 
-❓ USER QUESTION:
+--- USER QUESTION ---
 {req.question}
------------------------------------------------------
-
-Provide a clear and concise answer.
 """
 
     answer = _call_gemini(prompt)
 
     if not answer:
-        return {
-            "answer": "❌ Gemini API failed. Check your API key or backend logs."
-        }
+        return {"answer": "❌ Gemini API failed. Check your API key or backend logs."}
 
     return {"answer": answer}

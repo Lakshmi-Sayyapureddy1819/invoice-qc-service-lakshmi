@@ -1,56 +1,52 @@
+# app.py
 import streamlit as st
 import requests
 import json
 
-# -----------------------------
-# CONFIG
-# -----------------------------
+# CHANGE THIS if running backend locally:
+# BACKEND_URL = "http://127.0.0.1:8000"
 BACKEND_URL = "https://invoice-qc-service-lakshmi.onrender.com"
 
 st.set_page_config(
     page_title="Invoice QC System",
     layout="wide",
-    page_icon="🧾"
+    page_icon="🧾",
 )
 
 st.title("🧾 Invoice QC System (Multilingual + AI Chat)")
 
 
 # ============================================================
-# SIDEBAR → PDF UPLOAD
+# SIDEBAR → UPLOAD
 # ============================================================
 st.sidebar.header("📤 Upload Invoices")
 
 uploaded_files = st.sidebar.file_uploader(
     "Select one or more invoice files (PDF, PNG, JPG)",
     type=["pdf", "png", "jpg", "jpeg"],
-    accept_multiple_files=True
+    accept_multiple_files=True,
 )
 
-# OCR STATUS
+# OCR status info
 try:
-    ocr_res = requests.get(f"{BACKEND_URL}/ocr-status", timeout=2)
+    ocr_res = requests.get(f"{BACKEND_URL}/ocr-status", timeout=3)
     ocr_ok = ocr_res.json().get("ocr_available", False)
 except Exception:
     ocr_ok = False
 
 if not ocr_ok:
-    st.sidebar.warning(
-        "OCR (Tesseract) not available on the server — image uploads will not be OCR'ed."
-    )
+    st.sidebar.warning("OCR not available on server — image invoices may not parse well.")
 else:
-    st.sidebar.info("OCR available: images uploaded here will be OCR'ed server-side.")
+    st.sidebar.info("OCR available: image invoices will be OCR’ed server-side.")
 
-process_btn = st.sidebar.button("Process PDFs")
+process_btn = st.sidebar.button("Process Invoices")
 
 
 # ============================================================
-# PROCESS PDFs
+# PROCESS PDFs/IMAGES
 # ============================================================
 if process_btn and uploaded_files:
-
     with st.spinner("Extracting + validating invoices..."):
-
         files = []
         for f in uploaded_files:
             mime = getattr(f, "type", None) or "application/octet-stream"
@@ -64,10 +60,10 @@ if process_btn and uploaded_files:
 
         if res.status_code != 200:
             st.error("❌ Backend returned an error.")
+            st.text(res.text)
             st.stop()
 
         data = res.json()
-
         st.session_state["invoices"] = data["invoices"]
         st.session_state["summary"] = data["summary"]
         st.session_state["results"] = data["results"]
@@ -77,15 +73,14 @@ if process_btn and uploaded_files:
 
 
 # ============================================================
-# DISPLAY EXTRACTED INVOICES
+# SHOW EXTRACTED INVOICES
 # ============================================================
 if "invoices" in st.session_state:
     st.subheader("📄 Extracted Invoice Data")
     st.json(st.session_state["invoices"])
 
-
 # ============================================================
-# DISPLAY VALIDATION SUMMARY
+# SHOW VALIDATION SUMMARY
 # ============================================================
 if "summary" in st.session_state:
     st.subheader("✅ Validation Summary")
@@ -96,9 +91,9 @@ if "summary" in st.session_state:
 # CHATBOT SECTION
 # ============================================================
 if "invoices" in st.session_state:
-
     st.subheader("💬 Ask the AI About Your Invoices (Any Language!)")
 
+    # Existing chat history
     for msg in st.session_state["messages"]:
         role = "🧑 User" if msg["role"] == "user" else "🤖 AI"
         st.markdown(f"**{role}:** {msg['content']}")
@@ -112,7 +107,7 @@ if "invoices" in st.session_state:
             payload = {
                 "invoices": st.session_state["invoices"],
                 "summary": st.session_state["summary"],
-                "question": user_input
+                "question": user_input,
             }
 
             try:
@@ -123,9 +118,10 @@ if "invoices" in st.session_state:
 
             if res.status_code != 200:
                 st.error("❌ Chat endpoint error.")
+                st.text(res.text)
             else:
                 data = res.json()
-                answer = data["answer"]
+                answer = data.get("answer", "No answer returned.")
 
                 st.session_state["messages"].append(
                     {"role": "user", "content": user_input}
